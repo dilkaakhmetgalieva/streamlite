@@ -135,7 +135,7 @@ searcher.fit(X_train_scaled_cat, y_train)
 best_alpha = searcher.best_params_["alpha"]
 print("Best alpha = %.4f" % best_alpha)
 
-lr_ridge_best = Ridge(alpha=best alpha)
+lr_ridge_best = Ridge(alpha=best_alpha)
 lr_ridge_best.fit(X_train_scaled_cat, y_train)
 
 # --- 3. ИНТЕРФЕЙС STREAMLIT ---
