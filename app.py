@@ -134,7 +134,7 @@ X_train, y_train, ohe, std_scaler, feat_names = get_X_y(df_train)
 @st.cache_resource
 def train_ridge(X, y):
     params = {'alpha': np.logspace(-2, 3, 10)}
-    grid = GridSearchCV(Ridge(), params, cv=10, scoring='neg_root_mean_squared_error')
+    grid = GridSearchCV(Ridge(), params, cv=10, scoring='r2')
     grid.fit(X, y)
     return grid.best_estimator_
 
