@@ -2,7 +2,38 @@ import streamlit as st
 import pandas as pd
 import joblib
 
-model = joblib.load('car_price_model.pkl')
+def car_data_cleaner(X):
+    df = X.copy()
+    
+    if 'name' in df.columns:
+        df['name'] = df['name'].astype(str).apply(lambda x: x.split()[0])
+    
+    cols_to_clean = ['mileage', 'engine', 'max_power']
+    for col in cols_to_clean:
+        if col in df.columns:
+            df[col] = (df[col].astype(str)
+                       .str.replace(r'[^0-9.]', '', regex=True)
+                       .replace('', np.nan)
+                       .astype(float))
+            
+    if 'torque' in df.columns:
+        s = df['torque'].astype(str).str.lower().str.replace(',', '', regex=False)
+        is_kgm = s.str.contains('kgm', na=False)
+        
+        df['max_torque_rpm'] = s.str.findall(r'\d+').str[-1].apply(lambda x: float(x) if isinstance(x, str) else np.nan)
+        df['torque'] = s.str.extract(r'(\d+\.?\d*)')[0].astype(float)
+        
+        df.loc[is_kgm, 'torque'] *= 9.8
+   
+    if 'seats' in df.columns:
+        df['seats'] = df['seats'].astype(str).replace('nan', np.nan)
+        
+    return df
+
+def load_model():
+    return joblib.load('car_price_model.pkl')
+
+model = load_model()
 
 st.title('Предсказание цены автомобиля')
 
