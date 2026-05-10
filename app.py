@@ -24,18 +24,16 @@ np.random.seed(RANDOM_STATE)
 
 @st.cache_data
 def load_data():
-    df_tr = pd.read_csv(CARS_TRAIN)
-    df_te = pd.read_csv(CARS_TEST)
+    df_train = pd.read_csv(CARS_TRAIN)
+    df_test = pd.read_csv(CARS_TEST)
     # Удаление дублей
-    cols_check = df_tr.drop(columns=['selling_price']).columns
-    df_tr = df_tr.drop_duplicates(subset=cols_check, keep='first').reset_index(drop=True)
-    return df_tr, df_te
+    cols_check = df_train.drop(columns=['selling_price']).columns
+    df_train = df_train.drop_duplicates(subset=cols_check, keep='first').reset_index(drop=True)
+    return df_train, df_test
 
 df_train, df_test = load_data()
 
 def cleaner(df):
-    df = df.copy()
-    # Чистка числовых столбцов
     cols_to_clean = ['mileage', 'engine', 'max_power']
     for col in cols_to_clean:
         if df[col].dtype == object:
@@ -59,19 +57,26 @@ df_train = cleaner(df_train)
 df_test = cleaner(df_test)
 
 # Заполнение пропусков медианой
-medians = df_train[['mileage', 'engine', 'max_power', 'torque', 'seats', 'max_torque_rpm']].median()
-for col in medians.index:
-    df_train[col] = df_train[col].fillna(medians[col])
-    df_test[col] = df_test[col].fillna(medians[col])
+df_train['mileage'] = df_train['mileage'].fillna(df_train['mileage'].median())
+df_train['engine'] = df_train['engine'].fillna(df_train['engine'].median())
+df_train['max_power'] = df_train['max_power'].fillna(df_train['max_power'].median())
+df_train['torque'] = df_train['torque'].fillna(df_train['torque'].median())
+df_train['seats'] = df_train['seats'].fillna(df_train['seats'].median())
+df_train['max_torque_rpm'] = df_train['max_torque_rpm'].fillna(df_train['max_torque_rpm'].median())
 
-df_train['engine'] = df_train['engine'].astype(int)
-df_train['seats'] = df_train['seats'].astype(int)
-df_test['engine'] = df_test['engine'].astype(int)
-df_test['seats'] = df_test['seats'].astype(int)
+df_test['mileage'] = df_test['mileage'].fillna(df_train['mileage'].median())
+df_test['engine'] = df_test['engine'].fillna(df_train['engine'].median())
+df_test['max_power'] = df_test['max_power'].fillna(df_train['max_power'].median())
+df_test['torque'] = df_test['torque'].fillna(df_train['torque'].median())
+df_test['seats'] = df_test['seats'].fillna(df_train['seats'].median())
+df_test['max_torque_rpm'] = df_test['max_torque_rpm'].fillna(df_train['max_torque_rpm'].median())
 
 # Выделение таргета
 y_train = df_train['selling_price']
 y_test = df_test['selling_price']
+
+df_train['engine'] = df_train['engine'].astype(int)
+df_train['seats'] = df_train['seats'].astype(int)
 
 # Подготовка признаков (Берем только марку из названия)
 X_train_cat = df_train.drop('selling_price', axis=1).copy()
@@ -80,33 +85,58 @@ X_train_cat['name'] = X_train_cat['name'].str.split().str[0]
 X_test_cat = df_test.drop('selling_price', axis=1).copy()
 X_test_cat['name'] = X_test_cat['name'].str.split().str[0]
 
-# OHE Кодирование
-cat_cols = ['name', 'fuel', 'seller_type', 'transmission', 'owner', 'seats']
-num_cols = ['year', 'km_driven', 'mileage', 'engine', 'max_power', 'torque', 'max_torque_rpm']
+from sklearn.preprocessing import OneHotEncoder
+
+cat_cols = X_train_cat.select_dtypes(include='object').columns.tolist()
+if 'seats' not in cat_cols:
+    cat_cols.append('seats')
+num_cols = [col for col in X_train_cat.columns if col not in cat_cols]
 
 ohe = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
 encoded_train = ohe.fit_transform(X_train_cat[cat_cols])
-X_train_ready = pd.concat([X_train_cat[num_cols].reset_index(drop=True), 
-                           pd.DataFrame(encoded_train, columns=ohe.get_feature_names_out(cat_cols))], axis=1)
+encoded_train_df = pd.DataFrame(
+    encoded_train,
+    columns=ohe.get_feature_names_out(cat_cols),
+    index=X_train_cat.index
+)
+X_train_ready = pd.concat([X_train_cat[num_cols], encoded_train_df], axis=1)
 
 encoded_test = ohe.transform(X_test_cat[cat_cols])
-X_test_ready = pd.concat([X_test_cat[num_cols].reset_index(drop=True), 
-                          pd.DataFrame(encoded_test, columns=ohe.get_feature_names_out(cat_cols))], axis=1)
+encoded_test_df = pd.DataFrame(
+    encoded_test,
+    columns=ohe.get_feature_names_out(cat_cols),
+    index=X_test_cat.index
+)
+X_test_ready = pd.concat([X_test_cat[num_cols], encoded_test_df], axis=1)
+
+numeric_train_cat = X_train_ready.select_dtypes(include='number')
+numeric_test_cat = X_test_ready.select_dtypes(include='number')
 
 # Масштабирование
 scaler = StandardScaler()
-X_train_scaled = scaler.fit_transform(X_train_ready)
-X_test_scaled = scaler.transform(X_test_ready)
+
+X_train_scaled_cat = scaler.fit_transform(numeric_train_cat)
+X_test_scaled_cat = scaler.transform(numeric_test_cat)
 
 # --- 2. ОБУЧЕНИЕ МОДЕЛИ ---
+from sklearn.linear_model import Ridge
+from sklearn.model_selection import GridSearchCV
+
 @st.cache_resource
 def train_model(X, y):
-    alphas = np.logspace(-2, 3, 10)
-    grid = GridSearchCV(Ridge(), [{"alpha": alphas}], scoring="neg_root_mean_squared_error", cv=5)
-    grid.fit(X, y)
-    return grid.best_estimator_
+    alphas = np.logspace(-2, 3, 20)
+    searcher = GridSearchCV(Ridge(), [{
+        "alpha": alphas
+    }],
+                        scoring="neg_root_mean_squared_error",
+                        cv=10)
+searcher.fit(X_train_scaled_cat, y_train)
 
-lr_ridge_best = train_model(X_train_scaled, y_train)
+best_alpha = searcher.best_params_["alpha"]
+print("Best alpha = %.4f" % best_alpha)
+
+lr_ridge_best = Ridge(alpha=best alpha)
+lr_ridge_best.fit(X_train_scaled_cat, y_train)
 
 # --- 3. ИНТЕРФЕЙС STREAMLIT ---
 tabs = st.tabs(["📊 EDA", "🚗 Предсказание", "🧬 Веса модели"])
