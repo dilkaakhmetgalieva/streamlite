@@ -10,7 +10,7 @@ import seaborn as sns
 st.set_page_config(page_title="Прогноз стоимости автомобилей", layout="wide")
 
 # 1. Функция очистки данных
-def clean_data(df):
+def fast_clean(df):
     df = df.copy()
 
     for col in ['mileage', 'engine', 'max_power']:
