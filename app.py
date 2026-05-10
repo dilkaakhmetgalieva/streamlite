@@ -15,51 +15,72 @@ st.title("🚗 Прогноз стоимости автомобилей")
 # --- 1. ФУНКЦИИ ПРЕДОБРАБОТКИ (из твоего кода) ---
 def clean_engine_mileage_power(df):
     df = df.copy()
-    # Очистка числовых колонок от единиц измерения
-    for col in ['mileage', 'engine', 'max_power']:
-        if df[col].dtype == object:
-            df[col] = df[col].astype(str).str.extract(r'(\d+\.?\d*)').astype(float)
-    
-    # Обработка torque
-    if 'torque' in df.columns and df['torque'].dtype == object:
-        s = df['torque'].astype(str).str.lower().str.replace(',', '', regex=False)
-        is_kgm = s.str.contains('kgm', na=False)
-        extracted_torque = s.str.extract(r'(\d+\.?\d*)')[0].astype(float)
-        # Извлекаем последнее число как RPM
-        df['max_torque_rpm'] = s.str.findall(r'\d+').str[-1].astype(float)
-        df['torque'] = extracted_torque
-        df.loc[is_kgm, 'torque'] *= 9.8  # перевод в Nm
+
+    # Чистим числовые колонки
+    for col in ['mileage', 'engine', 'max_power', 'torque']:
+        if col in df.columns:
+            df[col] = (
+                df[col]
+                .astype(str)
+                .str.replace(',', '.', regex=False)
+                .str.extract(r'(\d+\.?\d*)')[0]
+            )
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+
+    # torque: отдельная обработка kgm -> Nm и rpm
+    if 'torque' in df.columns:
+        torque_raw = df['torque'].astype(str).str.lower()
+        is_kgm = torque_raw.str.contains('kgm', na=False)
+
+        # если torque уже стал numeric после extract — ок, иначе будет NaN
+        torque_num = pd.to_numeric(
+            torque_raw.str.extract(r'(\d+\.?\d*)')[0],
+            errors='coerce'
+        )
+
+        df['torque'] = torque_num
+        df.loc[is_kgm, 'torque'] = df.loc[is_kgm, 'torque'] * 9.8
+
+        # rpm извлекаем отдельно
+        rpm = torque_raw.str.extract(r'(\d+)\s*rpm')[0]
+        df['max_torque_rpm'] = pd.to_numeric(rpm, errors='coerce')
+
     return df
 
 @st.cache_data
 def load_and_prep_data():
-    # Загрузка (замени пути на свои, если файлы локально)
     train_url = 'https://github.com/evgpat/datasets/raw/refs/heads/main/cars_train.csv'
     test_url = 'https://github.com/evgpat/datasets/raw/refs/heads/main/cars_test.csv'
-    
+
     df_train = pd.read_csv(train_url)
     df_test = pd.read_csv(test_url)
-    
-    # Удаление дубликатов (кроме целевой переменной)
+
     cols_no_price = df_train.drop(columns=['selling_price']).columns
     df_train = df_train.drop_duplicates(subset=cols_no_price).reset_index(drop=True)
-    
-    # Очистка
+
     df_train = clean_engine_mileage_power(df_train)
     df_test = clean_engine_mileage_power(df_test)
-    
-    # Заполнение пропусков медианой из train
+
     numeric_cols = ['mileage', 'engine', 'max_power', 'torque', 'seats', 'max_torque_rpm']
+
     for col in numeric_cols:
+        if col not in df_train.columns:
+            df_train[col] = np.nan
+        if col not in df_test.columns:
+            df_test[col] = np.nan
+
+        df_train[col] = pd.to_numeric(df_train[col], errors='coerce')
+        df_test[col] = pd.to_numeric(df_test[col], errors='coerce')
+
         med = df_train[col].median()
         df_train[col] = df_train[col].fillna(med)
         df_test[col] = df_test[col].fillna(med)
-        
-    df_train['engine'] = df_train['engine'].astype(int)
-    df_train['seats'] = df_train['seats'].astype(int)
-    df_test['engine'] = df_test['engine'].astype(int)
-    df_test['seats'] = df_test['seats'].astype(int)
-    
+
+    df_train['engine'] = df_train['engine'].round().astype(int)
+    df_train['seats'] = df_train['seats'].round().astype(int)
+    df_test['engine'] = df_test['engine'].round().astype(int)
+    df_test['seats'] = df_test['seats'].round().astype(int)
+
     return df_train, df_test
 
 # --- 2. ОБУЧЕНИЕ МОДЕЛИ (ТВОЙ ПОДХОД) ---
