@@ -165,7 +165,7 @@ with tabs[0]:
         st.pyplot(fig2)
 
     st.divider()
-    st.subheader("Попарные отношения признаков (Pairplot)")
+    st.subheader("Попарные отношения признаков")
     
 
     pairplot_cols = ['selling_price', 'year', 'km_driven', 'max_power', 'engine']
