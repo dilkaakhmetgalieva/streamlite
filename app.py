@@ -1,134 +1,108 @@
-import streamlit as st
 import pandas as pd
 import numpy as np
-import joblib
 import matplotlib.pyplot as plt
+import random
 import seaborn as sns
+CARS_TRAIN = 'https://github.com/evgpat/datasets/raw/refs/heads/main/cars_train.csv'
+CARS_TEST = 'https://github.com/evgpat/datasets/raw/refs/heads/main/cars_test.csv'
+RANDOM_STATE = 42
+random.seed(RANDOM_STATE)
+np.random.seed(RANDOM_STATE)
+df_train = pd.read_csv(CARS_TRAIN)
+df_test = pd.read_csv(CARS_TEST)
+df_train_filtred = df_train.drop(columns=['selling_price'])
+df_train_filtred[df_train_filtred.duplicated()]
+cols = df_train_filtred.columns
+df_train = df_train.drop_duplicates(subset=cols, keep='first')
+df_train = df_train.reset_index(drop=True)
+def cleaner(df):
+    cols_to_clean = ['mileage', 'engine', 'max_power']
+    for col in cols_to_clean:
+        if df[col].dtype == object: #это я добавила, чтобы при случайном перезапуске этой ячейки, всё не сломалось, так как объекты станут float и проверку на object уже не пройдут
+            df[col] = (df[col].astype(str).str.replace(r'[^0-9.]', '', regex=True).replace('', np.nan).replace('nan', np.nan).astype(float))
+    if 'torque' in df.columns and df['torque'].dtype == object:
+        s = df['torque'].astype(str).str.lower().str.replace(',', '', regex=False)
+        is_kgm = s.str.contains('kgm', na=False)
+        extracted_torque = s.str.extract(r'(\d+\.?\d*)')[0].astype(float)
+        df['max_torque_rpm'] = s.str.findall(r'\d+').str[-1].astype(float)
+        df['torque'] = extracted_torque
+        df.loc[is_kgm, 'torque'] *= 9.8
+        df.loc[s.eq('nan'), ['torque', 'max_torque_rpm']] = np.nan
 
-st.set_page_config(page_title="Car Price App", layout="wide")
+    return df
 
-st.title("Прогнозирование цены автомобиля")
+df_train = cleaner(df_train)
+df_test = cleaner(df_test)
+df_train['mileage'] = df_train['mileage'].fillna(df_train['mileage'].median())
+df_train['engine'] = df_train['engine'].fillna(df_train['engine'].median())
+df_train['max_power'] = df_train['max_power'].fillna(df_train['max_power'].median())
+df_train['torque'] = df_train['torque'].fillna(df_train['torque'].median())
+df_train['seats'] = df_train['seats'].fillna(df_train['seats'].median())
+df_train['max_torque_rpm'] = df_train['max_torque_rpm'].fillna(df_train['max_torque_rpm'].median())
+df_test['mileage'] = df_test['mileage'].fillna(df_train['mileage'].median())
+df_test['engine'] = df_test['engine'].fillna(df_train['engine'].median())
+df_test['max_power'] = df_test['max_power'].fillna(df_train['max_power'].median())
+df_test['torque'] = df_test['torque'].fillna(df_train['torque'].median())
+df_test['seats'] = df_test['seats'].fillna(df_train['seats'].median())
+df_test['max_torque_rpm'] = df_test['max_torque_rpm'].fillna(df_train['max_torque_rpm'].median())
+df_train['engine'] = df_train['engine'].astype(int)
+df_train['seats'] = df_train['seats'].astype(int)
 
-@st.cache_resource
-def load_model():
-    return joblib.load("car_price_model.pkl")
+df_test['engine'] = df_test['engine'].astype(int)
+df_test['seats'] = df_test['seats'].astype(int)
+X_train_cat = df_train.drop('selling_price', axis=1).copy()
+X_train_cat['name'] = X_train_cat['name'].str.split().str[0]
 
-model = load_model()
+X_test_cat = df_test.drop('selling_price', axis=1).copy()
+X_test_cat['name'] = X_test_cat['name'].str.split().str[0]
+from sklearn.preprocessing import OneHotEncoder
 
-@st.cache_data
-def load_data():
-    return pd.read_csv("https://github.com/evgpat/datasets/raw/refs/heads/main/cars_train.csv")
+cat_cols = X_train_cat.select_dtypes(include='object').columns.tolist()
+if 'seats' not in cat_cols:
+    cat_cols.append('seats')
+num_cols = [col for col in X_train_cat.columns if col not in cat_cols]
 
-df = load_data()
-st.header("EDA")
+ohe = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
+encoded_train = ohe.fit_transform(X_train_cat[cat_cols])
+encoded_train_df = pd.DataFrame(
+    encoded_train,
+    columns=ohe.get_feature_names_out(cat_cols),
+    index=X_train_cat.index
+)
+X_train_ready = pd.concat([X_train_cat[num_cols], encoded_train_df], axis=1)
 
-col1, col2 = st.columns(2)
+encoded_test = ohe.transform(X_test_cat[cat_cols])
+encoded_test_df = pd.DataFrame(
+    encoded_test,
+    columns=ohe.get_feature_names_out(cat_cols),
+    index=X_test_cat.index
+)
+X_test_ready = pd.concat([X_test_cat[num_cols], encoded_test_df], axis=1)
+numeric_train_cat = X_train_ready.select_dtypes(include='number')
+numeric_test_cat = X_test_ready.select_dtypes(include='number')
+scaler = StandardScaler()
 
-with col1:
-    fig, ax = plt.subplots(figsize=(8, 5))
-    sns.histplot(df['selling_price'], kde=True, ax=ax)
-    ax.set_title("Распределение цены автомобиля")
-    st.pyplot(fig)
+X_train_scaled_cat = scaler.fit_transform(numeric_train_cat)
+X_test_scaled_cat = scaler.transform(numeric_test_cat)
+from sklearn.linear_model import Ridge
+from sklearn.model_selection import GridSearchCV
 
-with col2:
-    fig, ax = plt.subplots(figsize=(8, 5))
-    sns.boxplot(x=df['fuel'], y=df['selling_price'], ax=ax)
-    ax.set_title("Цена по типу топлива")
-    plt.xticks(rotation=30)
-    st.pyplot(fig)
-col3, col4 = st.columns(2)
+alphas = np.logspace(-2, 3, 20)
+searcher = GridSearchCV(Ridge(), [{
+    "alpha": alphas
+}],
+                        scoring="neg_root_mean_squared_error",
+                        cv=10)
+searcher.fit(X_train_scaled_cat, y_train)
 
-with col3:
-    fig, ax = plt.subplots(figsize=(8, 5))
-    sns.scatterplot(data=df, x='km_driven', y='selling_price', ax=ax)
-    ax.set_title("Зависимость цены от пробега")
-    st.pyplot(fig)
+best_alpha = searcher.best_params_["alpha"]
+print("Best alpha = %.4f" % best_alpha)
+lr_ridge_best = Ridge(alpha=162.3777)
+lr_ridge_best.fit(X_train_scaled_cat, y_train)
 
-with col4:
-    fig, ax = plt.subplots(figsize=(8, 5))
-    sns.barplot(data=df, x='transmission', y='selling_price', ax=ax)
-    ax.set_title("Цена по типу коробки передач")
-    st.pyplot(fig)
-st.header("Ручной ввод признаков")
+pred_test = lr_ridge_best.predict(X_test_scaled_cat)
+mse = mean_squared_error(y_test, pred_test)
 
-with st.form("input_form"):
-    name = st.text_input("Название авто", "Hyundai Grand i10 Sportz")
-    year = st.number_input("Год выпуска", min_value=1990, max_value=2025, value=2017)
-    km_driven = st.number_input("Пробег", min_value=0, value=35000)
-    fuel = st.selectbox("Тип топлива", df['fuel'].dropna().unique().tolist())
-    seller_type = st.selectbox("Тип продавца", df['seller_type'].dropna().unique().tolist())
-    transmission = st.selectbox("Трансмиссия", df['transmission'].dropna().unique().tolist())
-    owner = st.selectbox("Владелец", df['owner'].dropna().unique().tolist())
-    mileage = st.text_input("Mileage", "18.9 kmpl")
-    engine = st.text_input("Engine", "1197 CC")
-    max_power = st.text_input("Max power", "82 bhp")
-    torque = st.text_input("Torque", "114Nm@ 4000rpm")
-    seats = st.number_input("Seats", min_value=1, max_value=20, value=5)
+pred_train7 = lr_ridge_best.predict(X_train_scaled_cat)
+pred_test7 = lr_ridge_best.predict(X_test_scaled_cat)
 
-    submitted = st.form_submit_button("Предсказать цену")
-if submitted:
-    input_df = pd.DataFrame([{
-        'name': name,
-        'year': year,
-        'km_driven': km_driven,
-        'fuel': fuel,
-        'seller_type': seller_type,
-        'transmission': transmission,
-        'owner': owner,
-        'mileage': mileage,
-        'engine': engine,
-        'max_power': max_power,
-        'torque': torque,
-        'seats': seats
-    }])
-
-    prediction = model.predict(input_df)[0]
-    st.success(f"Предсказанная цена: {prediction:,.0f}")
-st.header("Загрузка CSV-файла")
-
-uploaded_file = st.file_uploader("Загрузите CSV с признаками", type=["csv"])
-
-if uploaded_file is not None:
-    csv_df = pd.read_csv(uploaded_file)
-
-    st.write("Первые строки загруженного файла:")
-    st.dataframe(csv_df.head())
-
-    try:
-        preds = model.predict(csv_df)
-        csv_df["predicted_selling_price"] = preds
-        st.success("Предсказания успешно получены")
-        st.dataframe(csv_df)
-        st.download_button(
-            label="Скачать результаты",
-            data=csv_df.to_csv(index=False).encode("utf-8"),
-            file_name="predictions.csv",
-            mime="text/csv"
-        )
-    except Exception as e:
-        st.error(f"Ошибка при предсказании: {e}")
-st.header("Веса модели")
-
-if st.button("Показать веса модели"):
-    preprocessor = model.named_steps['preprocessor']
-    ridge_model = model.named_steps['model']
-
-    feature_names = preprocessor.get_feature_names_out()
-    coefficients = ridge_model.coef_
-
-    coef_df = pd.DataFrame({
-        'feature': feature_names,
-        'weight': coefficients
-    }).sort_values(by='weight', key=lambda x: np.abs(x), ascending=False)
-
-    st.dataframe(coef_df)
-
-    fig, ax = plt.subplots(figsize=(12, 8))
-    top_n = 20
-    plot_df = coef_df.head(top_n).sort_values("weight")
-
-    ax.barh(plot_df['feature'], plot_df['weight'])
-    ax.set_title(f"Топ-{top_n} весов модели")
-    ax.set_xlabel("Вес")
-    ax.set_ylabel("Признак")
-    st.pyplot(fig)
