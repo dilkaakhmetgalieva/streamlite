@@ -36,17 +36,33 @@ def load_and_clean():
         
         # Обработка torque
         if 'torque' in temp.columns:
+            # Важно: работаем только с непустыми строками
             s = temp['torque'].astype(str).str.lower()
-            torque_val = s.str.extract(r'(\d+\.?\d*)')[0].astype(float)
+            
+            # Извлекаем само значение момента
+            torque_val = s.str.extract(r'(\d+\.?\d*)', expand=False).astype(float)
+            
             # Конвертация kgm в Nm
             is_kgm = s.str.contains('kgm', na=False)
             torque_val[is_kgm] = torque_val[is_kgm] * 9.8
             
-            # Извлечение RPM (берем последнее число в строке как верхнюю границу)
-            rpm = s.str.findall(r'\d+').apply(lambda x: float(x[-1]) if len(x) > 0 else np.nan)
+            # Извлечение RPM (безопасный способ)
+            # findall вернет пустой список, если ничего не найдено
+            list_of_numbers = s.str.findall(r'\d+')
+            
+            def get_last_num(x):
+                if isinstance(x, list) and len(x) > 0:
+                    try:
+                        return float(x[-1])
+                    except:
+                        return np.nan
+                return np.nan
+
+            rpm = list_of_numbers.apply(get_last_num)
             
             temp['torque'] = torque_val
             temp['max_torque_rpm'] = rpm
+            
         return temp
 
     df_train = process_strings(df_train)
