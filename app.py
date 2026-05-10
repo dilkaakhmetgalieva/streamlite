@@ -9,8 +9,8 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 
 # Настройка страницы
-st.set_page_config(page_title="Авто-Предиктор", layout="wide")
-st.title("🚗 Прогноз стоимости автомобилей")
+st.set_page_config(page_title="auto-predict", layout="wide")
+st.title("Предсказание стоимости автомобиля")
 
 # Константы
 TRAIN_URL = 'https://github.com/evgpat/datasets/raw/refs/heads/main/cars_train.csv'
@@ -20,28 +20,21 @@ TEST_URL = 'https://github.com/evgpat/datasets/raw/refs/heads/main/cars_test.csv
 cat_cols = ['name', 'fuel', 'seller_type', 'transmission', 'owner', 'seats']
 num_cols = ['year', 'km_driven', 'mileage', 'engine', 'max_power', 'torque', 'max_torque_rpm']
 
-# --- 1. ФУНКЦИИ ОЧИСТКИ ---
-
 def process_strings(df):
     temp = df.copy()
 
-    # Чистим числовые колонки
     for col in ['mileage', 'engine', 'max_power']:
         if col in temp.columns:
             temp[col] = temp[col].astype(str).str.extract(r'(\d+\.?\d*)')[0].astype(float)
 
-    # Обработка torque
     if 'torque' in temp.columns:
         s = temp['torque'].astype(str).str.lower()
 
-        # Значение момента
         torque_val = s.str.extract(r'(\d+\.?\d*)')[0].astype(float)
-
-        # Конвертация kgm в Nm
+        
         is_kgm = s.str.contains('kgm', na=False)
         torque_val[is_kgm] = torque_val[is_kgm] * 9.8
 
-        # RPM: берём последнее число из строки
         nums = s.str.findall(r'\d+')
 
         def get_last_num(x):
@@ -59,39 +52,32 @@ def process_strings(df):
 
     return temp
 
-
 @st.cache_data
 def load_and_clean():
     df_train = pd.read_csv(TRAIN_URL)
     df_test = pd.read_csv(TEST_URL)
 
-    # Удаление дубликатов
     cols_check = [c for c in df_train.columns if c != 'selling_price']
     df_train = df_train.drop_duplicates(subset=cols_check).reset_index(drop=True)
 
-    # Очистка строк
     df_train = process_strings(df_train)
     df_test = process_strings(df_test)
 
-    # Считаем медианы только по колонкам, которые реально есть
     med_cols = [c for c in num_cols if c in df_train.columns]
     medians = df_train[med_cols].median()
 
-    # Если каких-то числовых колонок нет, создаём их
     for col in num_cols:
         if col not in df_train.columns:
             df_train[col] = medians.get(col, 0)
         if col not in df_test.columns:
             df_test[col] = medians.get(col, 0)
 
-    # Заполняем пропуски
     for col in num_cols:
         if col in df_train.columns:
             df_train[col] = df_train[col].fillna(medians.get(col, 0))
         if col in df_test.columns:
             df_test[col] = df_test[col].fillna(medians.get(col, 0))
 
-    # Категориальные пропуски
     for col in cat_cols:
         if col in df_train.columns:
             df_train[col] = df_train[col].fillna('unknown').astype(str)
@@ -103,18 +89,14 @@ def load_and_clean():
 
 df_train, df_test, medians = load_and_clean()
 
-# --- 2. ПОДГОТОВКА ПРИЗНАКОВ ---
-
 def get_X_y(df, is_train=True, encoder=None, scaler=None):
     df = df.copy()
 
-    # Если name есть — приводим к марке
     if 'name' in df.columns:
         df['name'] = df['name'].astype(str).str.split().str[0]
     else:
         df['name'] = 'unknown'
 
-    # Создаём недостающие колонки
     for col in num_cols:
         if col not in df.columns:
             df[col] = medians.get(col, 0)
@@ -123,7 +105,6 @@ def get_X_y(df, is_train=True, encoder=None, scaler=None):
         if col not in df.columns:
             df[col] = 'unknown'
 
-    # Заполняем пропуски
     for col in num_cols:
         df[col] = df[col].fillna(medians.get(col, 0))
 
@@ -150,37 +131,50 @@ def get_X_y(df, is_train=True, encoder=None, scaler=None):
 
 X_train, y_train, ohe, std_scaler, feat_names = get_X_y(df_train)
 
-# --- 3. ОБУЧЕНИЕ МОДЕЛИ ---
-
 @st.cache_resource
 def train_ridge(X, y):
     params = {'alpha': np.logspace(-2, 3, 10)}
-    grid = GridSearchCV(Ridge(), params, cv=5, scoring='neg_root_mean_squared_error')
+    grid = GridSearchCV(Ridge(), params, cv=10, scoring='neg_root_mean_squared_error')
     grid.fit(X, y)
     return grid.best_estimator_
 
 model = train_ridge(X_train, y_train)
 
-# --- 4. ИНТЕРФЕЙС STREAMLIT ---
-
-tabs = st.tabs(["📊 Анализ (EDA)", "🔮 Предсказание", "🧮 Веса модели"])
+tabs = st.tabs(["Основные графики", "Предсказание стоимости автомобиля", "Веса модели"])
 
 with tabs[0]:
-    st.header("Анализ данных")
+    st.header("Визуализация данных")
+    
     col1, col2 = st.columns(2)
 
     with col1:
+        st.subheader("Распределение целевой переменной")
         fig1, ax1 = plt.subplots()
-        sns.histplot(y_train, kde=True, color='green', ax=ax1)
-        ax1.set_title("Распределение цены")
+        sns.histplot(df_train['selling_price'], kde=True, color='green', ax=ax1)
+        ax1.set_title("Распределение цены (selling_price)")
         st.pyplot(fig1)
 
     with col2:
-        fig2, ax2 = plt.subplots()
-        corr_matrix = df_train[num_cols + ['selling_price']].corr()
+        st.subheader("Матрица корреляций")
+        fig2, ax2 = plt.subplots(figsize=(10, 8))
+        # Объединяем числовые признаки и целевую переменную для корреляции
+        corr_cols = [c for c in num_cols if c in df_train.columns] + ['selling_price']
+        corr_matrix = df_train[corr_cols].corr()
         sns.heatmap(corr_matrix, annot=True, cmap='coolwarm', fmt=".2f", ax=ax2)
-        ax2.set_title("Корреляция признаков")
+        ax2.set_title("Корреляция признаков и цены")
         st.pyplot(fig2)
+
+    st.divider()
+    st.subheader("Попарные отношения признаков (Pairplot)")
+    
+
+    pairplot_cols = ['selling_price', 'year', 'km_driven', 'max_power', 'engine']
+    available_cols = [c for c in pairplot_cols if c in df_train.columns]
+    
+    df_sample = df_train[available_cols].sample(min(500, len(df_train)))
+    
+    fig4 = sns.pairplot(df_sample, diag_kind='kde', plot_kws={'alpha': 0.5})
+    st.pyplot(fig4.figure)
 
 with tabs[1]:
     mode = st.radio("Способ ввода:", ["Вручную", "Загрузить CSV"])
@@ -243,7 +237,6 @@ with tabs[1]:
                     else:
                         test_proc[col] = test_proc[col].fillna(medians.get(col, 0))
 
-                # Создаём недостающие категориальные колонки
                 for col in cat_cols:
                     if col not in test_proc.columns:
                         test_proc[col] = 'unknown'
