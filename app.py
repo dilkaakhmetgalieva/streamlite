@@ -1,179 +1,134 @@
-import os
 import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
-import plotly.express as px
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-st.set_page_config(page_title="Прогноз стоимости автомобилей", layout="wide")
+st.set_page_config(page_title="Car Price App", layout="wide")
 
-# 1. Функция очистки данных
-def fast_clean(df):
-    df = df.copy()
+st.title("Прогнозирование цены автомобиля")
 
-    for col in ['mileage', 'engine', 'max_power']:
-        if col in df.columns:
-            df[col] = (
-                df[col]
-                .astype(str)
-                .str.extract(r'(\d+\.?\d*)')[0]
-                .astype(float)
-            )
-
-    if 'torque' in df.columns:
-        df['torque'] = df['torque'].astype(str).str.lower()
-        df['max_torque_rpm'] = df['torque'].str.findall(r'\d+').str[-1].apply(
-            lambda x: float(x) if isinstance(x, str) else np.nan
-        )
-        df['torque'] = (
-            df['torque']
-            .str.extract(r'(\d+\.?\d*)')[0]
-            .astype(float)
-        )
-
-    if 'name' in df.columns:
-        df['name'] = df['name'].astype(str).str.split().str[0]
-
-    return df
-
-# 2. Загрузка модели
 @st.cache_resource
 def load_model():
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    model_path = os.path.join(base_dir, "car_price_model.pkl")
+    return joblib.load("car_price_model.pkl")
 
-    st.write("Папка app.py:", base_dir)
-    st.write("Путь к модели:", model_path)
-    st.write("Модель существует:", os.path.exists(model_path))
+model = load_model()
 
-    return joblib.load(model_path)
+@st.cache_data
+def load_data():
+    return pd.read_csv("https://github.com/evgpat/datasets/raw/refs/heads/main/cars_train.csv")
 
-try:
-    model_pipeline = load_model()
-    st.success("Модель успешно загружена")
-except Exception as e:
-    st.error(f"Не удалось загрузить модель: {e}")
-    st.stop()
+df = load_data()
+st.header("EDA")
 
-st.title('🚗 Прогноз стоимости автомобилей')
+col1, col2 = st.columns(2)
 
-# --- БЛОК 1: EDA ---
-st.header('📊 Анализ данных (EDA)')
-uploaded_train = st.file_uploader("Загрузите тренировочный CSV для анализа", type="csv", key='eda')
+with col1:
+    fig, ax = plt.subplots(figsize=(8, 5))
+    sns.histplot(df['selling_price'], kde=True, ax=ax)
+    ax.set_title("Распределение цены автомобиля")
+    st.pyplot(fig)
 
-if uploaded_train:
+with col2:
+    fig, ax = plt.subplots(figsize=(8, 5))
+    sns.boxplot(x=df['fuel'], y=df['selling_price'], ax=ax)
+    ax.set_title("Цена по типу топлива")
+    plt.xticks(rotation=30)
+    st.pyplot(fig)
+col3, col4 = st.columns(2)
+
+with col3:
+    fig, ax = plt.subplots(figsize=(8, 5))
+    sns.scatterplot(data=df, x='km_driven', y='selling_price', ax=ax)
+    ax.set_title("Зависимость цены от пробега")
+    st.pyplot(fig)
+
+with col4:
+    fig, ax = plt.subplots(figsize=(8, 5))
+    sns.barplot(data=df, x='transmission', y='selling_price', ax=ax)
+    ax.set_title("Цена по типу коробки передач")
+    st.pyplot(fig)
+st.header("Ручной ввод признаков")
+
+with st.form("input_form"):
+    name = st.text_input("Название авто", "Hyundai Grand i10 Sportz")
+    year = st.number_input("Год выпуска", min_value=1990, max_value=2025, value=2017)
+    km_driven = st.number_input("Пробег", min_value=0, value=35000)
+    fuel = st.selectbox("Тип топлива", df['fuel'].dropna().unique().tolist())
+    seller_type = st.selectbox("Тип продавца", df['seller_type'].dropna().unique().tolist())
+    transmission = st.selectbox("Трансмиссия", df['transmission'].dropna().unique().tolist())
+    owner = st.selectbox("Владелец", df['owner'].dropna().unique().tolist())
+    mileage = st.text_input("Mileage", "18.9 kmpl")
+    engine = st.text_input("Engine", "1197 CC")
+    max_power = st.text_input("Max power", "82 bhp")
+    torque = st.text_input("Torque", "114Nm@ 4000rpm")
+    seats = st.number_input("Seats", min_value=1, max_value=20, value=5)
+
+    submitted = st.form_submit_button("Предсказать цену")
+if submitted:
+    input_df = pd.DataFrame([{
+        'name': name,
+        'year': year,
+        'km_driven': km_driven,
+        'fuel': fuel,
+        'seller_type': seller_type,
+        'transmission': transmission,
+        'owner': owner,
+        'mileage': mileage,
+        'engine': engine,
+        'max_power': max_power,
+        'torque': torque,
+        'seats': seats
+    }])
+
+    prediction = model.predict(input_df)[0]
+    st.success(f"Предсказанная цена: {prediction:,.0f}")
+st.header("Загрузка CSV-файла")
+
+uploaded_file = st.file_uploader("Загрузите CSV с признаками", type=["csv"])
+
+if uploaded_file is not None:
+    csv_df = pd.read_csv(uploaded_file)
+
+    st.write("Первые строки загруженного файла:")
+    st.dataframe(csv_df.head())
+
     try:
-        df_eda = pd.read_csv(uploaded_train)
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            st.subheader("Цены")
-            if "selling_price" in df_eda.columns:
-                fig1 = px.histogram(df_eda, x="selling_price", title="Распределение цен")
-                st.plotly_chart(fig1, use_container_width=True)
-            else:
-                st.info("Нет колонки selling_price")
-
-        with col2:
-            st.subheader("Пробег vs Цена")
-            if "km_driven" in df_eda.columns and "selling_price" in df_eda.columns:
-                fig2 = px.scatter(df_eda, x="km_driven", y="selling_price", color="fuel" if "fuel" in df_eda.columns else None)
-                st.plotly_chart(fig2, use_container_width=True)
-            else:
-                st.info("Нет нужных колонок для scatter")
-
-        with col3:
-            st.subheader("Тип топлива")
-            if "fuel" in df_eda.columns:
-                fig3 = px.pie(df_eda, names='fuel', title="Доля типов топлива")
-                st.plotly_chart(fig3, use_container_width=True)
-            else:
-                st.info("Нет колонки fuel")
-
+        preds = model.predict(csv_df)
+        csv_df["predicted_selling_price"] = preds
+        st.success("Предсказания успешно получены")
+        st.dataframe(csv_df)
+        st.download_button(
+            label="Скачать результаты",
+            data=csv_df.to_csv(index=False).encode("utf-8"),
+            file_name="predictions.csv",
+            mime="text/csv"
+        )
     except Exception as e:
-        st.error(f"Ошибка при анализе CSV: {e}")
+        st.error(f"Ошибка при предсказании: {e}")
+st.header("Веса модели")
 
-# --- БЛОК 2: Предсказание ---
-st.header('🤖 Предсказание цены')
+if st.button("Показать веса модели"):
+    preprocessor = model.named_steps['preprocessor']
+    ridge_model = model.named_steps['model']
 
-tab1, tab2 = st.tabs(["Ввод вручную", "Загрузка файла"])
+    feature_names = preprocessor.get_feature_names_out()
+    coefficients = ridge_model.coef_
 
-with tab1:
-    col_a, col_b = st.columns(2)
+    coef_df = pd.DataFrame({
+        'feature': feature_names,
+        'weight': coefficients
+    }).sort_values(by='weight', key=lambda x: np.abs(x), ascending=False)
 
-    with col_a:
-        name = st.selectbox('Марка', ['Maruti', 'Skoda', 'Honda', 'Hyundai', 'Toyota', 'Ford', 'Renault', 'Mahindra'])
-        year = st.slider('Год выпуска', 1990, 2022, 2015)
-        km_driven = st.number_input('Пробег (км)', value=50000)
-        fuel = st.selectbox('Топливо', ['Diesel', 'Petrol', 'LPG', 'CNG'])
+    st.dataframe(coef_df)
 
-    with col_b:
-        engine = st.number_input('Объем двигателя (CC)', value=1200)
-        max_power = st.number_input('Мощность (bhp)', value=80.0)
-        seats = st.selectbox('Мест', [4, 5, 7, 8])
-        transmission = st.radio('КПП', ['Manual', 'Automatic'])
+    fig, ax = plt.subplots(figsize=(12, 8))
+    top_n = 20
+    plot_df = coef_df.head(top_n).sort_values("weight")
 
-    input_data = pd.DataFrame([[
-        name, year, km_driven, fuel, engine, max_power, seats, transmission,
-        'Individual', 'First Owner', '20 kmpl', '100Nm@ 2000rpm'
-    ]], columns=[
-        'name', 'year', 'km_driven', 'fuel', 'engine', 'max_power',
-        'seats', 'transmission', 'seller_type', 'owner', 'mileage', 'torque'
-    ])
-
-    input_data = clean_data(input_data)
-
-    if st.button('Рассчитать цену'):
-        try:
-            prediction = model_pipeline.predict(input_data)
-            st.balloons()
-            st.success(f'Предполагаемая цена: {round(float(prediction[0]), 2)} руб.')
-        except Exception as e:
-            st.error(f"Ошибка при предсказании: {e}")
-
-with tab2:
-    uploaded_file = st.file_uploader("Загрузите CSV с признаками для предсказания", type="csv", key='predict')
-
-    if uploaded_file:
-        try:
-            test_df = pd.read_csv(uploaded_file)
-            test_df = clean_data(test_df)
-
-            preds = model_pipeline.predict(test_df)
-            test_df['predicted_price'] = preds
-
-            st.write(test_df.head())
-            st.download_button(
-                "Скачать результат",
-                test_df.to_csv(index=False),
-                "predictions.csv",
-                "text/csv"
-            )
-        except Exception as e:
-            st.error(f"Ошибка при предсказании по файлу: {e}")
-
-# --- БЛОК 3: Веса модели ---
-st.header('⚖️ Веса модели (Feature Importance)')
-
-if st.checkbox('Показать важность признаков'):
-    try:
-        if hasattr(model_pipeline, 'named_steps'):
-            model = model_pipeline.named_steps.get('model', model_pipeline)
-        else:
-            model = model_pipeline
-
-        if hasattr(model, 'coef_'):
-            weights = model.coef_
-            fig_weights, ax_weights = plt.subplots(figsize=(10, 6))
-            top_weights = pd.Series(weights).sort_values(ascending=False).head(15)
-            sns.barplot(x=top_weights.values, y=top_weights.index, ax=ax_weights)
-            ax_weights.set_title("Важность признаков")
-            st.pyplot(fig_weights)
-            st.write("На графике показаны коэффициенты модели.")
-        else:
-            st.info("У модели нет коэффициентов для отображения.")
-    except Exception as e:
-        st.error(f"Ошибка при построении важности признаков: {e}")
+    ax.barh(plot_df['feature'], plot_df['weight'])
+    ax.set_title(f"Топ-{top_n} весов модели")
+    ax.set_xlabel("Вес")
+    ax.set_ylabel("Признак")
+    st.pyplot(fig)
